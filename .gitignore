@@ -34,3 +34,4 @@
 # force inclusion
 !*.example 
 
+/pipeline/*.mat
