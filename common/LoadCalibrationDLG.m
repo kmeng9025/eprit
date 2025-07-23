@@ -65,7 +65,7 @@ set(handles.pmCalibrations, 'string', calibrations);
 
 % Update handles structure
 guidata(hObject, handles);
-uiwait(handles.figure1)
+%uiwait(handles.figure1)
 
 function pars = CheckPars(in_pars)
 disp('hi1')
