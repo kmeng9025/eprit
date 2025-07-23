@@ -5,18 +5,21 @@ This folder contains the essential scripts for the automated medical imaging pip
 ## Core Pipeline Scripts
 
 ### `clean_pipeline.py`
+
 - **Purpose**: Main automation pipeline for processing medical images
 - **Function**: Creates ArbuzGUI projects, applies ROI detection, and generates statistics
 - **Usage**: Primary script for end-to-end automation
 - **Status**: Working and tested
 
 ### `enhanced_draw_roi.py` / `improved_Draw_ROI.py`
+
 - **Purpose**: Enhanced ROI detection with API wrapper
 - **Function**: Wraps the original Draw_ROI.py with UNet3D model for kidney detection
 - **Usage**: Called by the main pipeline for automated ROI detection
 - **Status**: Working with UNet3D model
 
 ### `roi_copy_script.py`
+
 - **Purpose**: Copy ROI masks between images
 - **Function**: Propagates ROI from reference image to other images in the project
 - **Usage**: Used within the pipeline for ROI propagation
@@ -25,12 +28,14 @@ This folder contains the essential scripts for the automated medical imaging pip
 ## MATLAB Compatibility Scripts
 
 ### `fix_matlab_compatibility.py`
+
 - **Purpose**: Fix MATLAB compatibility issues with generated project files
 - **Function**: Converts data types and formats for MATLAB compatibility
 - **Usage**: Run when MATLAB has trouble loading Python-generated project files
 - **Status**: Addresses known compatibility issues
 
 ### `create_matlab_native_project.py`
+
 - **Purpose**: Create project files directly in MATLAB to avoid compatibility issues
 - **Function**: Uses MATLAB engine to create native MATLAB project files
 - **Usage**: Alternative project creation method for maximum MATLAB compatibility
