@@ -25,6 +25,7 @@ function varargout = LoadCalibrationDLG(varargin)
 % Last Modified by GUIDE v2.5 27-Aug-2021 11:19:05
 
 % Begin initialization code - DO NOT EDIT
+disp('hi')
 gui_Singleton = 1;
 gui_State = struct('gui_Name',       mfilename, ...
                    'gui_Singleton',  gui_Singleton, ...
@@ -67,7 +68,8 @@ guidata(hObject, handles);
 uiwait(handles.figure1)
 
 function pars = CheckPars(in_pars)
-
+disp('hi1')
+% arbuz_ShowMessage('hello')
 pars.mG_per_mM = safeget(in_pars, 'mG_per_mM', 2.32);
 pars.MDNmG_per_mM = safeget(in_pars, 'MDNmG_per_mM', 0);
 pars.LLW_zero_po2 = safeget(in_pars, 'LLW_zero_po2', 12.4);
@@ -77,7 +79,8 @@ pars.Qcb = safeget(in_pars, 'Qcb', pars.Q);
 pars.Torr_per_mGauss = safeget(in_pars, 'Torr_per_mGauss', 1.84);
 
 function UpdateControls(handles)
-
+disp('hi2')
+disp(handles.output.Torr_per_mGauss)
 handles.epO2.String = num2str(handles.output.Torr_per_mGauss);
 handles.eLLW.String = num2str(handles.output.LLW_zero_po2);
 
@@ -89,7 +92,7 @@ handles.eQImage.String = num2str(handles.output.Q);
 handles.eQcalibration.String = num2str(handles.output.Qcb);
 
 function handles = ReadControls(handles)
-
+disp('hi3')
 handles.output.Torr_per_mGauss = str2double(handles.epO2.String);
 handles.output.LLW_zero_po2 = str2double(handles.eLLW.String);
 
@@ -104,6 +107,7 @@ handles.output.Qcb = str2double(handles.eQcalibration.String);
 % --- Outputs from this function are returned to the command line.
 function varargout = LoadCalibrationDLG_OutputFcn(hObject, ~, handles) 
 % Get default command line output from handles structure
+disp('hi4')
 if ~isempty(handles)
   varargout{1} = handles.output;
   delete(hObject);
@@ -113,6 +117,7 @@ end
 
 % --- Executes on selection change in pmCalibrations.
 function pmCalibrations_Callback(hObject, ~, handles)
+disp('hi5')
 probe = handles.pmCalibrations.String{handles.pmCalibrations.Value};
 fprintf('Calibration selected: %s\n', probe);
 clb = epr_spin_probe_calibration(probe);
@@ -133,6 +138,7 @@ UpdateControls(handles)
 
 % --- Executes on button press in pbOK.
 function pbOK_Callback(hObject, ~, handles)
+disp('hi6')
 handles = ReadControls(handles);
 guidata(hObject, handles);
 
@@ -140,6 +146,7 @@ uiresume
 
 % --- Executes on button press in pbOldValues.
 function pbOldValues_Callback(hObject, ~, handles)
+disp('hi7')
 handles.output = CheckPars(handles.pars);
 guidata(hObject, handles);
 UpdateControls(handles)

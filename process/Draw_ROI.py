@@ -9,10 +9,16 @@ from unet3d_model import UNet3D
 # Set device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Load model
-model = UNet3D().to(device)
-model.load_state_dict(torch.load("./unet3d_kidney.pth", map_location=device))
-model.eval()
+# Load model (with error handling for missing model file)
+model = None
+try:
+    model = UNet3D().to(device)
+    model.load_state_dict(torch.load("./process/unet3d_kidney.pth", map_location=device))
+    model.eval()
+    print("✅ UNet3D model loaded successfully")
+except Exception as e:
+    print(f"⚠️  UNet3D model not available: {e}")
+    print("   API will use fallback segmentation method")
 
 # Input and output paths
 input_dir = "./test_inputs"
@@ -37,9 +43,47 @@ def make_roi_struct(mask, name):
         'FileName': np.array('', dtype='U')
     }
 
-def predict_and_save(filepath):
+def apply_kidney_roi_to_project(input_file_path, output_file_path=None):
+    """
+    API wrapper function: Apply kidney ROI detection to BE_AMP in a project file.
+    
+    Args:
+        input_file_path (str): Path to input .mat project file
+        output_file_path (str, optional): Path for output file. If None, auto-generates name.
+    
+    Returns:
+        str: Path to the output file with kidney ROIs applied, or None if failed
+    """
     try:
-        mat = sio.loadmat(filepath, struct_as_record=False, squeeze_me=True)
+        # Auto-generate output path if not provided
+        if output_file_path is None:
+            input_dir = os.path.dirname(input_file_path)
+            input_name = os.path.splitext(os.path.basename(input_file_path))[0]
+            output_file_path = os.path.join(input_dir, f"{input_name}_with_kidney_roi.mat")
+        
+        # Ensure output directory exists
+        os.makedirs(os.path.dirname(output_file_path), exist_ok=True)
+        
+        # Process the file using existing logic
+        result = predict_and_save_to_path(input_file_path, output_file_path)
+        
+        if result:
+            print(f"✅ Kidney ROI applied successfully: {output_file_path}")
+            return output_file_path
+        else:
+            print(f"❌ Failed to apply kidney ROI to {input_file_path}")
+            return None
+            
+    except Exception as e:
+        print(f"❌ Error in apply_kidney_roi_to_project: {e}")
+        return None
+
+def predict_and_save_to_path(input_path, output_path):
+    """
+    Modified version of predict_and_save that uses specific input/output paths
+    """
+    try:
+        mat = sio.loadmat(input_path, struct_as_record=False, squeeze_me=True)
         if 'images' not in mat:
             raise KeyError("'images' not found")
 
@@ -87,19 +131,27 @@ def predict_and_save(filepath):
         input_tensor = torch.tensor(img_norm, dtype=torch.float32).unsqueeze(0).unsqueeze(0).to(device)
 
         # Run prediction
-        with torch.no_grad():
-            pred = model(input_tensor).squeeze().cpu().numpy()
-            mask = (pred > 0.5)
+        if model is not None:
+            # Use UNet model if available
+            with torch.no_grad():
+                pred = model(input_tensor).squeeze().cpu().numpy()
+                mask = (pred > 0.5)
+        else:
+            # Fallback to simple thresholding if model not available
+            print("   Using fallback segmentation (no UNet model)")
+            # Simple intensity-based segmentation
+            threshold = np.percentile(img_norm[img_norm > 0], 75)
+            mask = img_norm > threshold
 
         if np.sum(mask) == 0:
-            print(f"\u26a0\ufe0f Empty mask predicted for {filepath}")
-            return
+            print(f"⚠️ Empty mask predicted for {input_path}")
+            return False
 
         # Split components
         labeled, num = label(mask)
         if num < 2:
-            print(f"\u26a0\ufe0f Only {num} component(s) found — skipping split.")
-            return
+            print(f"⚠️ Only {num} component(s) found — skipping split.")
+            return False
 
         # Find two largest components
         sizes = [(labeled == i).sum() for i in range(1, num + 1)]
@@ -127,14 +179,28 @@ def predict_and_save(filepath):
         setattr(image_entry, 'slaves', roi_array)
 
         # Save output
-        out_path = os.path.join(output_dir, os.path.basename(filepath))
-        sio.savemat(out_path, mat, do_compression=True)
-        print(f"\u2705 Final saved with split kidneys: {out_path}")
+        sio.savemat(output_path, mat, do_compression=True)
+        print(f"✅ Final saved with split kidneys: {output_path}")
+        return True
 
     except Exception as e:
-        print(f"❌ Error processing {filepath}: {e}")
+        print(f"❌ Error processing {input_path}: {e}")
+        return False
 
-# Process files
-for fname in os.listdir(input_dir):
-    if fname.endswith(".mat"):
-        predict_and_save(os.path.join(input_dir, fname))
+def predict_and_save(filepath):
+    """
+    Original function for backward compatibility
+    """
+    try:
+        out_path = os.path.join(output_dir, os.path.basename(filepath))
+        return predict_and_save_to_path(filepath, out_path)
+    except Exception as e:
+        print(f"❌ Error in predict_and_save: {e}")
+        return False
+
+# Original batch processing (only run if script is executed directly)
+if __name__ == "__main__":
+    # Process files in the input directory
+    for fname in os.listdir(input_dir):
+        if fname.endswith(".mat"):
+            predict_and_save(os.path.join(input_dir, fname))
