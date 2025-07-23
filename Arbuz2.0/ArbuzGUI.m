@@ -1,3 +1,4 @@
+%% 
 function varargout = ArbuzGUI(varargin)
 % Co-Registration GUI and plug-ins
 
