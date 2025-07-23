@@ -12,6 +12,240 @@ import scipy.io as sio
 from pathlib import Path
 from datetime import datetime
 import sys
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from skimage.transform import resize
+from scipy.ndimage import label, center_of_mass
+
+# UNet3D Model Definition
+class UNet3D(nn.Module):
+    def __init__(self):
+        super(UNet3D, self).__init__()
+
+        def conv_block(in_channels, out_channels):
+            return nn.Sequential(
+                nn.Conv3d(in_channels, out_channels, kernel_size=3, padding=1),
+                nn.BatchNorm3d(out_channels),
+                nn.ReLU(inplace=True),
+                nn.Conv3d(out_channels, out_channels, kernel_size=3, padding=1),
+                nn.BatchNorm3d(out_channels),
+                nn.ReLU(inplace=True)
+            )
+
+        self.enc1 = conv_block(1, 32)
+        self.pool1 = nn.MaxPool3d(2)
+        self.enc2 = conv_block(32, 64)
+        self.pool2 = nn.MaxPool3d(2)
+
+        self.bottleneck = conv_block(64, 128)
+
+        self.up2 = nn.ConvTranspose3d(128, 64, kernel_size=2, stride=2)
+        self.dec2 = conv_block(128, 64)
+        self.up1 = nn.ConvTranspose3d(64, 32, kernel_size=2, stride=2)
+        self.dec1 = conv_block(64, 32)
+
+        self.final = nn.Conv3d(32, 1, kernel_size=1)
+
+    def forward(self, x):
+        enc1 = self.enc1(x)
+        enc2 = self.enc2(self.pool1(enc1))
+        bottleneck = self.bottleneck(self.pool2(enc2))
+
+        up2 = self.up2(bottleneck)
+        dec2 = self.dec2(torch.cat([up2, enc2], dim=1))
+        up1 = self.up1(dec2)
+        dec1 = self.dec1(torch.cat([up1, enc1], dim=1))
+
+        return torch.sigmoid(self.final(dec1))
+
+# Set device and load model globally
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = None
+try:
+    # Try multiple possible locations for the model
+    model_paths = [
+        "./unet3d_kidney.pth",
+        "unet3d_kidney.pth", 
+        "pipeline/unet3d_kidney.pth",
+        os.path.join(os.path.dirname(__file__), "unet3d_kidney.pth"),
+        r"c:\Users\ftmen\Documents\v3\pipeline\unet3d_kidney.pth"
+    ]
+    
+    model_loaded = False
+    for model_path in model_paths:
+        if os.path.exists(model_path):
+            model = UNet3D().to(device)
+            model.load_state_dict(torch.load(model_path, map_location=device))
+            model.eval()
+            print(f"✅ UNet3D model loaded successfully from: {model_path}")
+            model_loaded = True
+            break
+    
+    if not model_loaded:
+        raise FileNotFoundError("UNet3D model file not found in any expected location")
+        
+except Exception as e:
+    print(f"UNet3D model not available: {e}")
+    print("   API will use fallback segmentation method")
+
+def make_roi_struct(mask, name):
+    """Create ROI structure for MATLAB"""
+    identity_matrix = np.eye(4, dtype=np.float64)
+    return {
+        'data': mask.astype(np.bool_),
+        'ImageType': '3DMASK',
+        'Name': name,
+        'A': identity_matrix.copy(),
+        'Anative': identity_matrix.copy(),
+        'Aprime': identity_matrix.copy(),
+        'isStore': 1,
+        'isLoaded': 0,
+        'Selected': 0,
+        'Visible': 0,
+        'box': np.array(mask.shape, dtype=np.float64),
+        'pars': np.array([]),
+        'FileName': np.array('', dtype='U')
+    }
+
+def apply_kidney_roi_to_project(input_file_path, output_file_path=None):
+    """
+    API wrapper function: Apply kidney ROI detection to BE_AMP in a project file.
+    """
+    global model, device
+    try:
+        # Auto-generate output path if not provided
+        if output_file_path is None:
+            input_dir = os.path.dirname(input_file_path)
+            input_name = os.path.splitext(os.path.basename(input_file_path))[0]
+            output_file_path = os.path.join(input_dir, f"{input_name}_with_kidney_roi.mat")
+        
+        # Ensure output directory exists
+        os.makedirs(os.path.dirname(output_file_path), exist_ok=True)
+        
+        # Process the file using existing logic
+        result = predict_and_save_to_path(input_file_path, output_file_path)
+        
+        if result:
+            print(f"✅ Kidney ROI applied successfully: {output_file_path}")
+            return output_file_path
+        else:
+            print(f"❌ Failed to apply kidney ROI to {input_file_path}")
+            return None
+            
+    except Exception as e:
+        print(f"❌ Error in apply_kidney_roi_to_project: {e}")
+        return None
+
+def predict_and_save_to_path(input_path, output_path):
+    """
+    Modified version of predict_and_save that uses specific input/output paths
+    """
+    global model, device
+    try:
+        mat = sio.loadmat(input_path, struct_as_record=False, squeeze_me=True)
+        if 'images' not in mat:
+            raise KeyError("'images' not found")
+
+        images_struct = mat['images']
+        identity = np.eye(4, dtype=np.float64)
+        for img in images_struct:
+            if hasattr(img, 'data') and isinstance(img.data, np.ndarray):
+                img.data = img.data.astype(np.float64)
+                img.A = identity.copy()
+                img.Anative = identity.copy()
+                img.Aprime = identity.copy()
+                img.box = np.array(img.data.shape[:3], dtype=np.float64)
+
+                if hasattr(img, 'data_info'):
+                    # Make sure 'Mask' field is logical
+                    if hasattr(img.data_info, 'Mask'):
+                        img.data_info.Mask = img.data_info.Mask.astype(bool)
+                    else:
+                        img.data_info.Mask = np.ones(img.data.shape, dtype=bool)
+
+                if hasattr(img, 'slaves') and isinstance(img.slaves, np.ndarray):
+                    for slave in img.slaves:
+                        if hasattr(slave, 'data'):
+                            slave.data = slave.data.astype(bool)
+                            slave.A = identity.copy()
+                            slave.Anative = identity.copy()
+                            slave.Aprime = identity.copy()
+                            slave.box = np.array(slave.data.shape[:3], dtype=np.float64)
+
+        # Find BE_AMP
+        be_amp_data = None
+        image_entry = None
+        for entry in images_struct:
+            if hasattr(entry, 'Name') and 'BE_AMP' in str(entry.Name):
+                be_amp_data = entry.data
+                image_entry = entry
+                break
+
+        if be_amp_data is None or be_amp_data.ndim != 3:
+            raise ValueError("Invalid or missing BE_AMP data")
+
+        # Normalize input
+        img_resized = resize(be_amp_data, (64, 64, 64), preserve_range=True)
+        img_norm = (img_resized - img_resized.min()) / (np.ptp(img_resized) + 1e-8)
+        input_tensor = torch.tensor(img_norm, dtype=torch.float32).unsqueeze(0).unsqueeze(0).to(device)
+
+        # Run prediction
+        if model is not None:
+            # Use UNet model if available
+            with torch.no_grad():
+                pred = model(input_tensor).squeeze().cpu().numpy()
+                mask = (pred > 0.5)
+        else:
+            # Fallback to simple thresholding if model not available
+            print("   Using fallback segmentation (no UNet model)")
+            # Simple intensity-based segmentation
+            threshold = np.percentile(img_norm[img_norm > 0], 75)
+            mask = img_norm > threshold
+
+        if np.sum(mask) == 0:
+            print(f"⚠️ Empty mask predicted for {input_path}")
+            return False
+
+        # Split components
+        labeled, num = label(mask)
+        if num < 2:
+            print(f"⚠️ Only {num} component(s) found — skipping split.")
+            return False
+
+        # Find two largest components
+        sizes = [(labeled == i).sum() for i in range(1, num + 1)]
+        largest = np.argsort(sizes)[-2:][::-1]
+        comp1 = (labeled == (largest[0] + 1))
+        comp2 = (labeled == (largest[1] + 1))
+
+        # Determine left/right
+        com1 = center_of_mass(comp1)
+        com2 = center_of_mass(comp2)
+
+        if com1[0] > com2[0]:
+            right_mask, left_mask = comp1, comp2
+        else:
+            right_mask, left_mask = comp2, comp1
+
+        # Create ROI structs
+        roi1 = make_roi_struct(right_mask, "Kidney")
+        roi2 = make_roi_struct(left_mask, "Kidney2")
+
+        # Attach both ROIs
+        roi_array = np.empty((2,), dtype=object)
+        roi_array[0] = roi1
+        roi_array[1] = roi2
+        setattr(image_entry, 'slaves', roi_array)
+
+        # Save output
+        sio.savemat(output_path, mat, do_compression=True)
+        print(f"Final saved with split kidneys: {output_path}")
+        return True
+
+    except Exception as e:
+        print(f"Error processing {input_path}: {e}")
+        return False
 
 class CleanMedicalPipeline:
     def __init__(self):
@@ -232,16 +466,8 @@ end
         print("🎯 Applying kidney ROI using Draw_ROI API...")
         
         try:
-            # Add process directory to path
-            process_path = os.path.join(os.getcwd(), 'process')
-            if process_path not in sys.path:
-                sys.path.insert(0, process_path)
-            
-            # Import Draw_ROI
-            import Draw_ROI
-            
-            # Use the API
-            output_file = Draw_ROI.apply_kidney_roi_to_project(
+            # Use the global functions defined above
+            output_file = apply_kidney_roi_to_project(
                 project_file, 
                 os.path.join(self.current_output_dir, f"roi_{os.path.basename(project_file)}")
             )
