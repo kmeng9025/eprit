@@ -1,6 +1,6 @@
 """
-Clean Medical Imaging Pipeline - Uses proven project creation + Draw_ROI API
-Keeps the working project creation method and adds ROI functionality
+Fixed Pipeline: Apply ROI and copy in single MATLAB operation
+Avoids scipy.io.savemat compatibility issues with slaves field
 """
 
 import matlab.engine
@@ -13,7 +13,7 @@ from pathlib import Path
 from datetime import datetime
 import sys
 
-class CleanMedicalPipeline:
+class FixedMedicalPipeline:
     def __init__(self):
         self.eng = None
         self.data_folder = r'c:\Users\ftmen\Documents\v3\DATA\241202'
@@ -40,7 +40,7 @@ class CleanMedicalPipeline:
     def setup_output_directory(self):
         """Create timestamped output directory"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.current_output_dir = self.output_base / f"clean_run_{timestamp}"
+        self.current_output_dir = self.output_base / f"fixed_run_{timestamp}"
         self.current_output_dir.mkdir(parents=True, exist_ok=True)
         
         print(f"📁 Output directory: {self.current_output_dir}")
@@ -74,7 +74,7 @@ class CleanMedicalPipeline:
         return tdms_files[:12]  # First 12 files
         
     def create_proven_project(self):
-        """Use the proven project creation method from final_custom_automation.py"""
+        """Use the proven project creation method"""
         print("🏗️  Creating project using proven method...")
         
         # Check for existing processed files
@@ -96,7 +96,7 @@ class CleanMedicalPipeline:
             return None
         
         # Create the project using proven MATLAB script approach
-        project_name = "clean_project.mat"
+        project_name = "fixed_project.mat"
         return self.create_matlab_project(processed_files, project_name)
         
     def create_matlab_project(self, processed_files, project_name):
@@ -104,8 +104,8 @@ class CleanMedicalPipeline:
         
         # Create the complete MATLAB script - same method that worked before
         script_content = f"""
-function create_clean_project()
-    disp('Creating clean ArbuzGUI project...');
+function create_fixed_project()
+    disp('Creating fixed ArbuzGUI project...');
     
     hGUI = ArbuzGUI();
     pause(2);
@@ -205,7 +205,7 @@ end
         """
         
         # Write and execute script
-        script_path = 'temp_clean_project.m'
+        script_path = 'temp_fixed_project.m'
         with open(script_path, 'w', encoding='utf-8') as f:
             f.write(script_content)
         
@@ -227,204 +227,196 @@ end
             if os.path.exists(script_path):
                 os.remove(script_path)
     
-    def apply_roi_with_draw_roi(self, project_file):
-        """Apply ROI using the Draw_ROI API"""
-        print("🎯 Applying kidney ROI using Draw_ROI API...")
+    def apply_roi_and_copy_in_matlab(self, project_file):
+        """Apply ROI and copy to all images using pure MATLAB approach"""
+        print("🎯 Applying and copying ROI using MATLAB...")
         
-        try:
-            # Add process directory to path
-            process_path = os.path.join(os.getcwd(), 'process')
-            if process_path not in sys.path:
-                sys.path.insert(0, process_path)
-            
-            # Import Draw_ROI
-            import Draw_ROI
-            
-            # Use the API
-            output_file = Draw_ROI.apply_kidney_roi_to_project(
-                project_file, 
-                os.path.join(self.current_output_dir, f"roi_{os.path.basename(project_file)}")
-            )
-            
-            if output_file and os.path.exists(output_file):
-                print(f"✅ ROI applied: {os.path.basename(output_file)}")
-                return output_file
-            else:
-                print("❌ ROI application failed")
-                return None
-                
-        except Exception as e:
-            print(f"❌ Error with Draw_ROI: {e}")
-            return None
-    
-    def copy_roi_to_all_images(self, project_file):
-        """Copy ROI to all other images using MATLAB to avoid corruption"""
-        print("📋 Copying ROI to all images...")
-        
-        # Create MATLAB script to handle ROI copying safely
+        # Create MATLAB script that handles both ROI detection and copying
         script_content = f"""
-function copy_roi_safely()
+function apply_and_copy_roi()
     project_file = '{project_file.replace(chr(92), '/')}';
     
     try
         % Load project
         project_data = load(project_file);
-        
-        % Handle different structure formats
-        if isfield(project_data, 'images')
-            images = project_data.images;
-        else
-            error('No images field found in project');
-        end
+        images = project_data.images;
         
         fprintf('Loaded project with %d images\\n', length(images));
+        fprintf('Images type: %s\\n', class(images));
         
-        % Find BE_AMP with ROIs
-        source_rois = [];
-        source_idx = 0;
+        % Find BE_AMP image for ROI detection
+        be_amp_idx = 0;
         
-        % Handle both cell and struct array formats
-        for i = 1:length(images)
-            img_name = '';
-            
-            % Extract name safely
-            if iscell(images)
+        % Handle cell array format
+        if iscell(images)
+            for i = 1:length(images)
                 img = images{{i}};
-                if isfield(img, 'Name')
-                    img_name = img.Name;
+                if isfield(img, 'Name') && strcmp(img.Name, 'BE_AMP')
+                    be_amp_idx = i;
+                    break;
                 end
-                has_slaves = isfield(img, 'slaves') && ~isempty(img.slaves);
-            else
-                if isfield(images(i), 'Name')
-                    img_name = images(i).Name;
-                end
-                has_slaves = isfield(images(i), 'slaves') && ~isempty(images(i).slaves);
             end
-            
-            if strcmp(img_name, 'BE_AMP') && has_slaves
-                if iscell(images)
-                    source_rois = images{{i}}.slaves;
-                else
-                    source_rois = images(i).slaves;
+        else
+            % Struct array format
+            for i = 1:length(images)
+                if isfield(images(i), 'Name') && strcmp(images(i).Name, 'BE_AMP')
+                    be_amp_idx = i;
+                    break;
                 end
-                source_idx = i;
-                fprintf('Found ROIs in BE_AMP at index %d\\n', i);
-                break;
             end
         end
         
-        if isempty(source_rois)
-            error('No ROIs found in BE_AMP');
+        if be_amp_idx == 0
+            error('BE_AMP image not found');
         end
         
-        % Copy ROIs to target images
-        target_names = {{'BE1', 'BE2', 'BE3', 'BE4', 'ME1', 'ME2', 'ME3', 'ME4', 'AE1', 'AE2', 'AE3', 'AE4'}};
-        copied_count = 0;
+        fprintf('Found BE_AMP at index %d\\n', be_amp_idx);
         
-        for i = 1:length(images)
-            if i == source_idx
-                continue;  % Skip BE_AMP itself
-            end
+        % Get BE_AMP image data
+        if iscell(images)
+            be_amp_data = images{{be_amp_idx}}.data;
+        else
+            be_amp_data = images(be_amp_idx).data;
+        end
+        
+        if ndims(be_amp_data) == 4
+            be_amp_data = be_amp_data(:,:,:,1);  % First time point
+        end
+        
+        fprintf('BE_AMP data size: [%s]\\n', num2str(size(be_amp_data)));
+        
+        % Call Python UNet detection directly from MATLAB
+        fprintf('Calling Python UNet for kidney detection...\\n');
+        
+        % Create temporary data file for Python
+        temp_data_file = 'temp_be_amp_data.mat';
+        save(temp_data_file, 'be_amp_data');
+        
+        % Call Python script
+        python_command = sprintf('python -c "import sys; sys.path.insert(0, ''process''); import Draw_ROI; import scipy.io as sio; data = sio.loadmat(''%s''); mask1, mask2 = Draw_ROI.detect_kidneys_from_data(data[''be_amp_data'']); sio.savemat(''temp_masks.mat'', {{''mask1'': mask1, ''mask2'': mask2}})"', temp_data_file);
+        
+        [status, result] = system(python_command);
+        
+        if status ~= 0
+            error('Python UNet detection failed: %s', result);
+        end
+        
+        % Load detected masks
+        if exist('temp_masks.mat', 'file')
+            mask_data = load('temp_masks.mat');
+            mask1 = logical(mask_data.mask1);
+            mask2 = logical(mask_data.mask2);
             
-            img_name = '';
+            fprintf('Detected kidney masks: %d and %d voxels\\n', sum(mask1(:)), sum(mask2(:)));
+            
+            % Create ROI structures
+            roi1 = create_roi_structure(mask1, 'Kidney', size(be_amp_data));
+            roi2 = create_roi_structure(mask2, 'Kidney2', size(be_amp_data));
+            
+            % Add ROIs to BE_AMP
             if iscell(images)
-                if isfield(images{{i}}, 'Name')
-                    img_name = images{{i}}.Name;
-                end
+                images{{be_amp_idx}}.slaves = {{roi1, roi2}};
             else
-                if isfield(images(i), 'Name')
-                    img_name = images(i).Name;
+                images(be_amp_idx).slaves = [roi1, roi2];
+            end
+            
+            % Copy ROIs to all other images
+            target_names = {{'BE1', 'BE2', 'BE3', 'BE4', 'ME1', 'ME2', 'ME3', 'ME4', 'AE1', 'AE2', 'AE3', 'AE4'}};
+            copied_count = 0;
+            
+            for i = 1:length(images)
+                if i == be_amp_idx
+                    continue;  % Skip BE_AMP itself
+                end
+                
+                img_name = '';
+                if iscell(images)
+                    if isfield(images{{i}}, 'Name')
+                        img_name = images{{i}}.Name;
+                    end
+                else
+                    if isfield(images(i), 'Name')
+                        img_name = images(i).Name;
+                    end
+                end
+                
+                if any(strcmp(img_name, target_names))
+                    if iscell(images)
+                        images{{i}}.slaves = {{roi1, roi2}};
+                    else
+                        images(i).slaves = [roi1, roi2];
+                    end
+                    copied_count = copied_count + 1;
+                    fprintf('  Copied ROIs to %s\\n', img_name);
                 end
             end
             
-            % Check if this is a target image
-            if any(strcmp(img_name, target_names))
-                % Copy ROIs directly - MATLAB handles structure properly
-                if iscell(images)
-                    images{{i}}.slaves = source_rois;
-                else
-                    images(i).slaves = source_rois;
-                end
-                copied_count = copied_count + 1;
-                fprintf('  Copied ROIs to %s\\n', img_name);
+            fprintf('ROIs copied to %d images\\n', copied_count);
+            
+            % Clean up temp files
+            if exist(temp_data_file, 'file')
+                delete(temp_data_file);
             end
+            if exist('temp_masks.mat', 'file')
+                delete('temp_masks.mat');
+            end
+            
+        else
+            error('Mask detection failed - no temp_masks.mat created');
         end
         
-        % Save using MATLAB (preserves structure integrity)
-        output_file = '{str(self.current_output_dir / f"complete_{os.path.basename(project_file)}").replace(chr(92), '/')}';
+        % Save final project
         project_data.images = images;
+        output_file = '{str(self.current_output_dir / "complete_fixed_project.mat").replace(chr(92), '/')}';
         save(output_file, '-struct', 'project_data');
         
-        fprintf('ROIs copied to %d images\\n', copied_count);
         fprintf('Complete project saved: %s\\n', output_file);
         
     catch ME
-        fprintf('Error in ROI copying: %s\\n', ME.message);
+        fprintf('Error: %s\\n', ME.message);
         rethrow(ME);
     end
 end
+
+function roi = create_roi_structure(mask, name, img_size)
+    roi = struct();
+    roi.data = mask;
+    roi.ImageType = '3DMASK';
+    roi.Name = name;
+    roi.A = eye(4);
+    roi.Anative = eye(4);
+    roi.Aprime = eye(4);
+    roi.isStore = 1;
+    roi.isLoaded = 0;
+    roi.Selected = 0;
+    roi.Visible = 0;
+    roi.box = img_size;
+    roi.pars = [];
+    roi.FileName = '';
+end
         """
         
-        script_path = 'temp_copy_roi_safe.m'
+        script_path = 'temp_apply_copy_roi.m'
         with open(script_path, 'w', encoding='utf-8') as f:
             f.write(script_content)
         
         try:
             self.eng.run(script_path[:-2], nargout=0)
-            output_file = self.current_output_dir / f"complete_{os.path.basename(project_file)}"
+            output_file = self.current_output_dir / "complete_fixed_project.mat"
             
             if output_file.exists():
-                print(f"✅ ROIs copied using MATLAB: {output_file.name}")
+                print(f"✅ ROI applied and copied: {output_file.name}")
                 return str(output_file)
             else:
-                print("❌ MATLAB ROI copying failed")
+                print("❌ ROI application and copying failed")
                 return None
                 
         except Exception as e:
-            print(f"❌ Error in MATLAB ROI copying: {e}")
+            print(f"❌ Error in ROI application: {e}")
             return None
         finally:
             if os.path.exists(script_path):
                 os.remove(script_path)
-    
-    def get_image_name(self, img):
-        """Extract image name from structure"""
-        if hasattr(img, 'Name'):
-            if hasattr(img.Name, 'item'):
-                return str(img.Name.item())
-            elif isinstance(img.Name, str):
-                return img.Name
-            elif hasattr(img.Name, '__iter__') and len(img.Name) > 0:
-                return str(img.Name[0])
-        return "Unknown"
-    
-    def copy_roi_structure(self, source_roi):
-        """Create copy of ROI structure"""
-        if hasattr(source_roi, 'data'):
-            roi_copy = {
-                'data': source_roi.data.copy(),
-                'ImageType': getattr(source_roi, 'ImageType', '3DMASK'),
-                'Name': getattr(source_roi, 'Name', 'Kidney'),
-                'A': getattr(source_roi, 'A', np.eye(4)).copy(),
-                'Anative': getattr(source_roi, 'Anative', np.eye(4)).copy(),
-                'Aprime': getattr(source_roi, 'Aprime', np.eye(4)).copy(),
-                'isStore': getattr(source_roi, 'isStore', 1),
-                'isLoaded': getattr(source_roi, 'isLoaded', 0),
-                'Selected': getattr(source_roi, 'Selected', 0),
-                'Visible': getattr(source_roi, 'Visible', 0),
-                'box': getattr(source_roi, 'box', np.array([64, 64, 64])).copy(),
-                'pars': getattr(source_roi, 'pars', np.array([])).copy(),
-                'FileName': getattr(source_roi, 'FileName', '')
-            }
-        else:
-            roi_copy = {}
-            for key, value in source_roi.items():
-                if isinstance(value, np.ndarray):
-                    roi_copy[key] = value.copy()
-                else:
-                    roi_copy[key] = value
-        
-        return roi_copy
     
     def extract_statistics(self, project_file):
         """Extract statistics for both kidneys"""
@@ -447,7 +439,7 @@ end
                     rois = img.slaves if isinstance(img.slaves, (list, np.ndarray)) else [img.slaves]
                     
                     for i, roi in enumerate(rois):
-                        roi_name = getattr(roi, 'Name', f'ROI_{i+1}')
+                        roi_name = getattr(roi, 'Name', f'Kidney{i+1}')
                         if hasattr(roi, 'data'):
                             mask = roi.data.astype(bool)
                             
@@ -468,85 +460,83 @@ end
             
             if stats_data:
                 df = pd.DataFrame(stats_data)
-                excel_file = self.current_output_dir / "clean_statistics.xlsx"
-                df.to_excel(excel_file, index=False)
-                
-                print(f"✅ Statistics saved: {excel_file.name}")
-                return str(excel_file)
+                stats_file = self.current_output_dir / "fixed_statistics.xlsx"
+                df.to_excel(stats_file, index=False)
+                print(f"✅ Statistics saved: {stats_file.name}")
+                return str(stats_file)
             else:
-                print("❌ No statistics collected")
+                print("❌ No statistics extracted")
                 return None
                 
         except Exception as e:
             print(f"❌ Error extracting statistics: {e}")
             return None
     
+    def get_image_name(self, img):
+        """Extract image name from structure"""
+        if hasattr(img, 'Name'):
+            if hasattr(img.Name, 'item'):
+                return str(img.Name.item())
+            elif isinstance(img.Name, str):
+                return img.Name
+            elif hasattr(img.Name, '__iter__') and len(img.Name) > 0:
+                return str(img.Name[0])
+        return "Unknown"
+    
     def cleanup(self):
         """Clean up MATLAB engine"""
         if self.eng:
-            try:
-                self.eng.quit()
-            except:
-                pass
+            self.eng.quit()
+            print("🧹 MATLAB engine closed")
     
-    def run_clean_pipeline(self):
-        """Run the clean pipeline with proven methods"""
-        print("🔬 Clean Medical Imaging Pipeline")
-        print("=" * 45)
-        print("Proven Project Creation + Draw_ROI API + Statistics")
-        print("=" * 45)
+    def run_pipeline(self):
+        """Execute the complete pipeline"""
+        print("🔬 Fixed Medical Imaging Pipeline")
+        print("=" * 50)
+        print("MATLAB-Only Project + ROI Detection + Copy")
+        print("=" * 50)
         
         try:
             # Setup
-            output_dir = self.setup_output_directory()
+            self.setup_output_directory()
             self.start_matlab_engine()
             
-            # Step 1: Create project using proven method
-            print("\\n📁 Step 1: Creating project using proven method...")
+            # Step 1: Create project
+            print("\n📁 Step 1: Creating project using proven method...")
             project_file = self.create_proven_project()
             if not project_file:
-                raise ValueError("Project creation failed")
+                print("❌ Pipeline failed at project creation")
+                return
             
-            # Step 2: Apply ROI using Draw_ROI API
-            print("\\n🎯 Step 2: Applying ROI using Draw_ROI API...")
-            roi_project = self.apply_roi_with_draw_roi(project_file)
-            if not roi_project:
-                raise ValueError("ROI application failed")
-            
-            # Step 3: Copy ROI to all images
-            print("\\n📋 Step 3: Copying ROI to all images...")
-            complete_project = self.copy_roi_to_all_images(roi_project)
+            # Step 2: Apply ROI and copy in single MATLAB operation
+            print("\n🎯 Step 2: Applying and copying ROI in MATLAB...")
+            complete_project = self.apply_roi_and_copy_in_matlab(project_file)
             if not complete_project:
-                raise ValueError("ROI copying failed")
+                print("❌ Pipeline failed at ROI application/copying")
+                return
             
-            # Step 4: Extract statistics
-            print("\\n📊 Step 4: Extracting statistics...")
+            # Step 3: Extract statistics
+            print("\n📊 Step 3: Extracting statistics...")
             stats_file = self.extract_statistics(complete_project)
             
             # Summary
-            print(f"\\n🎉 CLEAN PIPELINE COMPLETE!")
-            print(f"📁 Output: {output_dir}")
-            print(f"📄 Final project: {Path(complete_project).name}")
+            print("\n🎉 FIXED PIPELINE COMPLETE!")
+            print(f"📁 Output: {self.current_output_dir}")
+            print(f"📄 Final project: {os.path.basename(complete_project)}")
             if stats_file:
-                print(f"📊 Statistics: {Path(stats_file).name}")
+                print(f"📊 Statistics: {os.path.basename(stats_file)}")
             
-            return output_dir
+            print(f"\n✅ Success! Results in: {self.current_output_dir}")
             
         except Exception as e:
-            print(f"❌ Pipeline failed: {e}")
-            return None
-            
+            print(f"\n❌ Pipeline failed: {e}")
         finally:
             self.cleanup()
 
 def main():
-    pipeline = CleanMedicalPipeline()
-    result = pipeline.run_clean_pipeline()
-    
-    if result:
-        print(f"\\n✅ Success! Results in: {result}")
-    else:
-        print(f"\\n❌ Failed. Check errors above.")
+    """Main function"""
+    pipeline = FixedMedicalPipeline()
+    pipeline.run_pipeline()
 
 if __name__ == "__main__":
     main()

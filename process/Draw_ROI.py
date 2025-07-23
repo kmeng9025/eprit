@@ -15,9 +15,9 @@ try:
     model = UNet3D().to(device)
     model.load_state_dict(torch.load("./process/unet3d_kidney.pth", map_location=device))
     model.eval()
-    print("✅ UNet3D model loaded successfully")
+    print("UNet3D model loaded successfully")
 except Exception as e:
-    print(f"⚠️  UNet3D model not available: {e}")
+    print(f"UNet3D model not available: {e}")
     print("   API will use fallback segmentation method")
 
 # Input and output paths
@@ -180,11 +180,11 @@ def predict_and_save_to_path(input_path, output_path):
 
         # Save output
         sio.savemat(output_path, mat, do_compression=True)
-        print(f"✅ Final saved with split kidneys: {output_path}")
+        print(f"Final saved with split kidneys: {output_path}")
         return True
 
     except Exception as e:
-        print(f"❌ Error processing {input_path}: {e}")
+        print(f"Error processing {input_path}: {e}")
         return False
 
 def predict_and_save(filepath):
@@ -195,8 +195,87 @@ def predict_and_save(filepath):
         out_path = os.path.join(output_dir, os.path.basename(filepath))
         return predict_and_save_to_path(filepath, out_path)
     except Exception as e:
-        print(f"❌ Error in predict_and_save: {e}")
+        print(f"Error in predict_and_save: {e}")
         return False
+
+def detect_kidneys_from_data(image_data):
+    """
+    Direct kidney detection from 3D numpy array
+    Returns mask1, mask2 for the two kidneys
+    """
+    try:
+        if model is None:
+            raise Exception("UNet3D model not available")
+        
+        # Prepare image data
+        if image_data.ndim == 4:
+            image_data = image_data[:, :, :, 0]  # First time point
+        
+        # Resize to model input size
+        target_size = (64, 64, 64)
+        original_shape = image_data.shape
+        
+        # Normalize
+        image_data = image_data.astype(np.float32)
+        if image_data.max() > image_data.min():
+            image_data = (image_data - image_data.min()) / (image_data.max() - image_data.min())
+        
+        # Resize
+        resized_image = resize(image_data, target_size, anti_aliasing=True, preserve_range=True)
+        
+        # Predict
+        input_tensor = torch.tensor(resized_image).unsqueeze(0).unsqueeze(0).float().to(device)
+        
+        with torch.no_grad():
+            prediction = model(input_tensor)
+            prediction = torch.sigmoid(prediction).squeeze().cpu().numpy()
+        
+        # Threshold
+        binary_mask = (prediction > 0.5).astype(np.uint8)
+        
+        # Resize back to original shape
+        final_mask = resize(binary_mask, original_shape, anti_aliasing=False, preserve_range=True) > 0.5
+        
+        # Separate into two kidneys
+        labeled_mask, num_labels = label(final_mask)
+        
+        if num_labels >= 2:
+            # Find two largest components
+            sizes = [(labeled_mask == i).sum() for i in range(1, num_labels + 1)]
+            largest_indices = np.argsort(sizes)[-2:]  # Two largest
+            
+            mask1 = (labeled_mask == (largest_indices[0] + 1)).astype(np.bool_)
+            mask2 = (labeled_mask == (largest_indices[1] + 1)).astype(np.bool_)
+        else:
+            # Fallback: split the single mask
+            if num_labels == 1:
+                coords = np.where(labeled_mask == 1)
+                center = [np.mean(coords[i]) for i in range(3)]
+                
+                mask1 = np.zeros_like(final_mask, dtype=bool)
+                mask2 = np.zeros_like(final_mask, dtype=bool)
+                
+                for i in range(len(coords[0])):
+                    pos = [coords[j][i] for j in range(3)]
+                    if pos[0] < center[0]:  # Split along first axis
+                        mask1[pos[0], pos[1], pos[2]] = True
+                    else:
+                        mask2[pos[0], pos[1], pos[2]] = True
+            else:
+                # No kidneys detected - create small dummy masks
+                mask1 = np.zeros_like(final_mask, dtype=bool)
+                mask2 = np.zeros_like(final_mask, dtype=bool)
+                center = [s//2 for s in original_shape]
+                mask1[center[0]-2:center[0]+2, center[1]-2:center[1]+2, center[2]-2:center[2]+2] = True
+                mask2[center[0]+5:center[0]+9, center[1]-2:center[1]+2, center[2]-2:center[2]+2] = True
+        
+        return mask1, mask2
+        
+    except Exception as e:
+        print(f"Error in kidney detection: {e}")
+        # Return empty masks
+        dummy_shape = image_data.shape if 'image_data' in locals() else (64, 64, 64)
+        return np.zeros(dummy_shape, dtype=bool), np.zeros(dummy_shape, dtype=bool)
 
 # Original batch processing (only run if script is executed directly)
 if __name__ == "__main__":

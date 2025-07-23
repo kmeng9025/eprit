@@ -266,97 +266,101 @@ end
 function copy_roi_matlab_safe()
     project_file = '{roi_project_file.replace(chr(92), '/')}';
     
-    % Load project
-    project_data = load(project_file);
-    
-    % Handle different structure formats
-    if isfield(project_data, 'images')
+    try
+        % Load project
+        project_data = load(project_file);
+        
+        if ~isfield(project_data, 'images')
+            error('No images field found in project');
+        end
+        
         images = project_data.images;
-    else
-        error('No images field found in project');
-    end
-    
-    % Convert to cell array if needed
-    if ~iscell(images) && isstruct(images)
-        images_cell = cell(length(images), 1);
-        for idx = 1:length(images)
-            images_cell{{idx}} = images(idx);
-        end
-        images = images_cell;
-    end
-    
-    % Find ROI source (BE_AMP)
-    source_rois = [];
-    for i = 1:length(images)
-        img = images{{i}};
-        img_name = '';
+        fprintf('Loaded project with %d images\\n', length(images));
         
-        % Extract name safely
-        if isfield(img, 'Name')
-            if ischar(img.Name)
-                img_name = img.Name;
-            elseif iscell(img.Name) && ~isempty(img.Name)
-                img_name = img.Name{{1}};
+        % Find ROI source (BE_AMP) - use simple indexing
+        source_rois = [];
+        source_idx = 0;
+        
+        for i = 1:length(images)
+            img_name = '';
+            
+            % Extract name safely - handle different formats
+            if isfield(images(i), 'Name')
+                name_field = images(i).Name;
+                if ischar(name_field)
+                    img_name = name_field;
+                elseif iscell(name_field) && ~isempty(name_field)
+                    img_name = name_field{{1}};
+                elseif isnumeric(name_field) && ~isempty(name_field)
+                    img_name = char(name_field);
+                end
+            end
+            
+            if strcmp(img_name, 'BE_AMP')
+                fprintf('Found BE_AMP at index %d\\n', i);
+                if isfield(images(i), 'slaves') && ~isempty(images(i).slaves)
+                    source_rois = images(i).slaves;
+                    source_idx = i;
+                    fprintf('Found ROIs in BE_AMP\\n');
+                    break;
+                end
             end
         end
         
-        if strcmp(img_name, 'BE_AMP') && isfield(img, 'slaves') && ~isempty(img.slaves)
-            source_rois = img.slaves;
-            fprintf('Found ROIs in BE_AMP\\n');
-            break;
+        if isempty(source_rois)
+            error('No ROIs found in BE_AMP');
         end
-    end
-    
-    if isempty(source_rois)
-        error('No ROIs found in BE_AMP');
-    end
-    
-    % Copy ROIs to other images
-    target_names = {{'BE1', 'BE2', 'BE3', 'BE4', 'ME1', 'ME2', 'ME3', 'ME4', 'AE1', 'AE2', 'AE3', 'AE4'}};
-    copied_count = 0;
-    
-    for i = 1:length(images)
-        img = images{{i}};
-        img_name = '';
         
-        % Extract name safely
-        if isfield(img, 'Name')
-            if ischar(img.Name)
-                img_name = img.Name;
-            elseif iscell(img.Name) && ~isempty(img.Name)
-                img_name = img.Name{{1}};
+        % Copy ROIs to target images - minimal manipulation
+        target_names = {{'BE1', 'BE2', 'BE3', 'BE4', 'ME1', 'ME2', 'ME3', 'ME4', 'AE1', 'AE2', 'AE3', 'AE4'}};
+        copied_count = 0;
+        
+        for i = 1:length(images)
+            img_name = '';
+            
+            % Extract name safely
+            if isfield(images(i), 'Name')
+                name_field = images(i).Name;
+                if ischar(name_field)
+                    img_name = name_field;
+                elseif iscell(name_field) && ~isempty(name_field)
+                    img_name = name_field{{1}};
+                elseif isnumeric(name_field) && ~isempty(name_field)
+                    img_name = char(name_field);
+                end
+            end
+            
+            % Check if this is a target image
+            is_target = false;
+            for j = 1:length(target_names)
+                if strcmp(img_name, target_names{{j}})
+                    is_target = true;
+                    break;
+                end
+            end
+            
+            if is_target
+                % Direct assignment - let MATLAB handle the structure
+                images(i).slaves = source_rois;
+                copied_count = copied_count + 1;
+                fprintf('  Copied ROIs to %s\\n', img_name);
             end
         end
         
-        if any(strcmp(img_name, target_names))
-            % Copy ROIs maintaining MATLAB structure
-            img.slaves = source_rois;
-            images{{i}} = img;
-            copied_count = copied_count + 1;
-            fprintf('  Copied ROIs to %s\\n', img_name);
-        end
+        % Update project data
+        project_data.images = images;
+        
+        % Save using MATLAB (maintains proper structure)
+        output_file = '{str(self.current_output_dir / f"complete_matlab_safe_{os.path.basename(roi_project_file)}").replace(chr(92), '/')}';
+        save(output_file, '-struct', 'project_data');
+        
+        fprintf('ROIs copied to %d images\\n', copied_count);
+        fprintf('Complete project saved: %s\\n', output_file);
+        
+    catch ME
+        fprintf('Error in ROI copying: %s\\n', ME.message);
+        rethrow(ME);
     end
-    
-    % Convert back to struct array if needed
-    if iscell(images)
-        images_struct = [];
-        for idx = 1:length(images)
-            if isempty(images_struct)
-                images_struct = images{{idx}};
-            else
-                images_struct(end+1) = images{{idx}};
-            end
-        end
-        images = images_struct;
-    end
-    
-    % Save using MATLAB (maintains proper structure)
-    output_file = '{str(self.current_output_dir / f"complete_matlab_safe_{os.path.basename(roi_project_file)}").replace(chr(92), '/')}';
-    project_data.images = images;
-    save(output_file, '-struct', 'project_data');
-    
-    fprintf('ROIs copied to %d images\\n', copied_count);
-    fprintf('Complete project saved: %s\\n', output_file);
 end
         """
         
