@@ -826,11 +826,14 @@ def main():
         # sys.exit(1)
     
     # Check for .tdms files in the directory
-    tdms_pattern = os.path.join(args.data, '*image4D_18x18_0p75gcm_file.tdms')
+    p_pattern = os.path.join(args.data, 'p*.mat')
+    p_files = glob.glob(p_pattern)
+    
+    tdms_pattern = os.path.join(args.data, '*' + p_files[0][1:-4] + '.tdms')
     tdms_files = glob.glob(tdms_pattern)
     if len(tdms_files) == 0:
         print(f"❌ Error: No .tdms files found in '{args.data}'")
-        print("Expected files matching pattern: *image4D_18x18_0p75gcm_file.tdms")
+        print("Expected files matching pattern: *" + p_files[0][1:-4] + '.tdms')
         sys.exit(1)
     
     print(f"📁 Using data directory: {args.data}")
