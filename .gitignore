@@ -17,7 +17,7 @@
 /EPRI.zip
 
 # ignore local version of functions
-*_local.m
+# *_local.m
 
 # exclude local version or data
 /pviewer/local/*
